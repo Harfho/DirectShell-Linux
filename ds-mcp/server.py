@@ -21,12 +21,41 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROFILES = os.path.join(ROOT, "ds_profiles")
+
+def _find_profiles():
+    """Locate the ds_profiles directory used by the running daemon.
+
+    Search order:
+    1. target/release/ds_profiles/  (release build — preferred)
+    2. target/debug/ds_profiles/    (debug build)
+    3. ds_profiles/                  (legacy: run from project root)
+
+    Whichever has a live directshell.lock whose pid still exists wins.
+    Falls back to release dir even if the daemon isn't running so callers
+    get a consistent path for writing snap_request etc.
+    """
+    candidates = [
+        os.path.join(ROOT, "target", "release", "ds_profiles"),
+        os.path.join(ROOT, "target", "debug",   "ds_profiles"),
+        os.path.join(ROOT, "ds_profiles"),
+    ]
+    for p in candidates:
+        lock = os.path.join(p, "directshell.lock")
+        try:
+            pid = int(open(lock).read().strip())
+            if os.path.exists(f"/proc/{pid}"):
+                return p
+        except (OSError, ValueError):
+            pass
+    # daemon not running — return the release path as default
+    return candidates[0]
+
+PROFILES = _find_profiles()
 
 WINDOWS_FILE = os.path.join(PROFILES, "windows.json")
 SNAP_REQUEST = os.path.join(PROFILES, "snap_request")
-SNAP_RESULT = os.path.join(PROFILES, "snap_result")
-ACTIVE_FILE = os.path.join(PROFILES, "is_active")
+SNAP_RESULT  = os.path.join(PROFILES, "snap_result")
+ACTIVE_FILE  = os.path.join(PROFILES, "is_active")
 
 SERVER_INFO = {"name": "directshell", "version": "1.0.0"}
 TOOLS = [
@@ -176,7 +205,14 @@ def active_db():
     first = content.strip().splitlines()[0].strip() if content.strip() else ""
     if not first or first == "none":
         return None
-    return os.path.join(PROFILES, first + ".db")
+    # New binaries write an absolute base path like
+    #   /home/.../target/release/ds_profiles/thunar
+    # Legacy binaries wrote just the app name like  thunar
+    if os.path.isabs(first):
+        db = first + ".db"
+    else:
+        db = os.path.join(PROFILES, first + ".db")
+    return db if os.path.exists(db) else db  # return path regardless; caller handles missing
 
 
 def tool_list_windows(_args):
@@ -430,7 +466,7 @@ def tool_get_clipboard(_args):
     db = active_db()
     if db is None:
         raise RuntimeError("no window snapped — call snap_window first")
-    out_file = os.path.join(ROOT, "ds_profiles", "clipboard_out")
+    out_file = os.path.join(PROFILES, "clipboard_out")
     try:
         os.remove(out_file)
     except OSError:

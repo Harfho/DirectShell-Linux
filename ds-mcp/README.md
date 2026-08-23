@@ -45,7 +45,7 @@ MCP client. Typical client config:
   "mcpServers": {
     "directshell": {
       "command": "python3",
-      "args": ["/home/harfho/DirectShell-Linux/ds-mcp/server.py"]
+      "args": ["/home/%user%/DirectShell-Linux/ds-mcp/server.py"]
     }
   }
 }

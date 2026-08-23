@@ -57,14 +57,41 @@ const SNAP_REQ_MS: u64 = 200;
 const MAX_DEPTH: i32 = 30;
 const MAX_NODES: usize = 20000;
 const STREAM_BATCH: i32 = 200;
-const DB_DIR: &str = "ds_profiles";
-const ACTIVE_FILE: &str = "ds_profiles/is_active";
-const LOG_FILE: &str = "ds_profiles/directshell.log";
-const WINDOWS_FILE: &str = "ds_profiles/windows.json";
-const CLIP_OUT_FILE: &str = "ds_profiles/clipboard_out";
-const SNAP_REQUEST_FILE: &str = "ds_profiles/snap_request";
-const SNAP_RESULT_FILE: &str = "ds_profiles/snap_result";
-const OVERLAY_MODE_FILE: &str = "ds_profiles/overlay_mode";
+// ── Paths resolved relative to the executable, not CWD ───────────────────
+// All ds_profiles/* files are always placed next to the binary so that
+// DirectShell works correctly regardless of the working directory from
+// which it (or an MCP client) is launched.
+
+fn base_dir() -> std::path::PathBuf {
+    // std::env::current_exe() follows symlinks; unwrap is safe at runtime
+    // because the process cannot be running without a valid exe path.
+    let exe = std::env::current_exe()
+        .expect("cannot resolve executable path");
+    exe.parent()
+        .expect("executable has no parent directory")
+        .join("ds_profiles")
+}
+
+/// Absolute path for a file inside ds_profiles/.
+/// Use `prof("")` (empty name) to get the directory itself.
+fn prof(name: &str) -> String {
+    if name.is_empty() {
+        base_dir().to_string_lossy().into_owned()
+    } else {
+        base_dir().join(name).to_string_lossy().into_owned()
+    }
+}
+
+// Keep these as compile-time identifiers for the *names* only (no longer
+// used as paths directly — call prof("name") to get the real path).
+const ACTIVE_NAME:       &str = "is_active";
+const LOG_NAME:          &str = "directshell.log";
+const WINDOWS_NAME:      &str = "windows.json";
+const CLIP_OUT_NAME:     &str = "clipboard_out";
+const SNAP_REQUEST_NAME: &str = "snap_request";
+const SNAP_RESULT_NAME:  &str = "snap_result";
+const OVERLAY_MODE_NAME: &str = "overlay_mode";
+const LOCK_NAME:         &str = "directshell.lock";
 
 // ── Logging ──────────────────────────────────────────
 static LOG_BUF: Mutex<Option<Vec<String>>> = Mutex::new(None);
@@ -91,7 +118,7 @@ fn log(msg: &str) {
     let content: String =
         buf.iter().map(|l| l.as_str()).collect::<Vec<_>>().join("\n") + "\n";
     drop(guard);
-    let _ = fs::write(LOG_FILE, content);
+    let _ = fs::write(prof(LOG_NAME), content);
 }
 
 // ── Global State ─────────────────────────────────────
@@ -147,7 +174,7 @@ fn db_name_from_title(title: &str) -> String {
         .collect();
     let clean = clean.trim_matches('_');
     let name = if clean.is_empty() { "unknown" } else { clean };
-    format!("{}/{}.db", DB_DIR, name)
+    format!("{}/{}.db", prof(""), name)
 }
 
 fn get_db_path() -> String {
@@ -165,7 +192,7 @@ fn write_active_status(db_path: &str) {
         let app = base.rsplit('/').next().unwrap_or("unknown");
         format!("{}\n{}.a11y\n{}.snap\n", app, base, base)
     };
-    let _ = fs::write(ACTIVE_FILE, content);
+    let _ = fs::write(prof(ACTIVE_NAME), content);
 }
 
 fn anim_t() -> f64 {
@@ -759,7 +786,11 @@ fn enumerate_windows(x: &XState) -> Vec<WinInfo> {
         let parts: Vec<&str> = cls_raw.split('\0').filter(|s| !s.is_empty()).collect();
         let exe = parts.last().copied().unwrap_or("").to_lowercase();
         let db_path = db_name_from_title(&title);
-        let app = db_path.trim_start_matches("ds_profiles/").trim_end_matches(".db").to_string();
+        let base_prefix = format!("{}/", prof(""));
+        let app = db_path
+            .trim_start_matches(base_prefix.as_str())
+            .trim_end_matches(".db")
+            .to_string();
         let pid = prop_u32s(x, w, x.atoms.net_wm_pid).first().copied().unwrap_or(0);
         let geom = window_geom(x, w);
         out.push(WinInfo { hwnd: w, title, app, exe, pid, geom });
@@ -790,7 +821,7 @@ fn enum_windows_to_json() {
         ))
     });
     if let Some(json) = json_opt {
-        let _ = fs::write(WINDOWS_FILE, json);
+        let _ = fs::write(prof(WINDOWS_NAME), json);
     }
 }
 
@@ -2442,7 +2473,7 @@ fn do_snap(target: u32, title: &str) {
     save(x, y, w, h);
 
     let db_path = db_name_from_title(title);
-    let _ = fs::create_dir_all(DB_DIR);
+    let _ = fs::create_dir_all(prof(""));
     set_db_path(&db_path);
     // One-time purge of stale unprocessed inject rows from a previous session.
     if let Some(c) = Connection::open(&db_path).ok() {
@@ -2826,12 +2857,12 @@ fn process_injections() {
             "clipget" => {
                 match get_clipboard() {
                     Some(s) => {
-                        let _ = fs::write(CLIP_OUT_FILE, s);
+                        let _ = fs::write(prof(CLIP_OUT_NAME), s);
                         true
                     }
                     None => {
                         log("clipget: no reply from selection owner");
-                        let _ = fs::write(CLIP_OUT_FILE, "");
+                        let _ = fs::write(prof(CLIP_OUT_NAME), "");
                         false
                     }
                 }
@@ -2883,11 +2914,13 @@ fn process_injections() {
 
 // ── Daemon: Snap Requests & Overlay Mode ─────────────
 fn check_snap_request() {
-    let content = match fs::read_to_string(SNAP_REQUEST_FILE) {
+    let snap_req = prof(SNAP_REQUEST_NAME);
+    let snap_res = prof(SNAP_RESULT_NAME);
+    let content = match fs::read_to_string(&snap_req) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let _ = fs::remove_file(SNAP_REQUEST_FILE);
+    let _ = fs::remove_file(&snap_req);
     let requested = content.trim().to_lowercase();
     if requested.is_empty() {
         return;
@@ -2897,7 +2930,7 @@ fn check_snap_request() {
             do_unsnap();
         }
         log("snap_request: !unsnap");
-        let _ = fs::write(SNAP_RESULT_FILE, r#"{"status":"ok","app":""}"#);
+        let _ = fs::write(&snap_res, r#"{"status":"ok","app":""}"#);
         return;
     }
     log(&format!("snap_request: looking for '{}'", requested));
@@ -2928,7 +2961,7 @@ fn check_snap_request() {
             log(&format!("snap_request: found '{}' at 0x{:X}", requested, w.hwnd));
             if snapped() && tgt() == w.hwnd {
                 let _ = fs::write(
-                    SNAP_RESULT_FILE,
+                    &snap_res,
                     format!(r#"{{"status":"ok","app":"{}"}}"#, requested),
                 );
                 return;
@@ -2940,14 +2973,14 @@ fn check_snap_request() {
             do_snap(w.hwnd, &w.title);
             let status = if snapped() { "ok" } else { "error" };
             let _ = fs::write(
-                SNAP_RESULT_FILE,
+                &snap_res,
                 format!(r#"{{"status":"{}","app":"{}"}}"#, status, requested),
             );
         }
         None => {
             log(&format!("snap_request: '{}' NOT FOUND", requested));
             let _ = fs::write(
-                SNAP_RESULT_FILE,
+                &snap_res,
                 format!(
                     r#"{{"status":"error","reason":"No window matching '{}' found"}}"#,
                     requested
@@ -2958,7 +2991,7 @@ fn check_snap_request() {
 }
 
 fn check_overlay_mode() {
-    let mode = match fs::read_to_string(OVERLAY_MODE_FILE) {
+    let mode = match fs::read_to_string(prof(OVERLAY_MODE_NAME)) {
         Ok(m) => m,
         Err(_) => return,
     };
@@ -2994,8 +3027,8 @@ fn activate_accessibility() {
 // Main
 // ═════════════════════════════════════════════════════
 fn single_instance_check() -> bool {
-    let _ = fs::create_dir_all(DB_DIR);
-    if let Ok(existing) = fs::read_to_string("ds_profiles/directshell.lock") {
+    let _ = fs::create_dir_all(prof(""));
+    if let Ok(existing) = fs::read_to_string(prof(LOCK_NAME)) {
         let pid: i32 = existing.trim().parse().unwrap_or(0);
         if pid > 0 && pid != std::process::id() as i32
             && std::path::Path::new(&format!("/proc/{}", pid)).exists()
@@ -3004,7 +3037,7 @@ fn single_instance_check() -> bool {
             return false;
         }
     }
-    let _ = fs::write("ds_profiles/directshell.lock", format!("{}", std::process::id()));
+    let _ = fs::write(prof(LOCK_NAME), format!("{}", std::process::id()));
     true
 }
 
@@ -3041,7 +3074,7 @@ fn main() {
         eprintln!("FATAL: cannot connect to X11 display (is DISPLAY set?)");
         std::process::exit(1);
     }
-    let _ = fs::create_dir_all(DB_DIR);
+    let _ = fs::create_dir_all(prof(""));
 
     unsafe {
         libc::signal(libc::SIGINT, on_signal as extern "C" fn(libc::c_int) as usize);
