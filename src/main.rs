@@ -248,7 +248,8 @@ fn init_db(db_path: &str) -> Option<Connection> {
             x             INTEGER,
             y             INTEGER,
             w             INTEGER,
-            h             INTEGER
+            h             INTEGER,
+            actions       INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_role      ON elements(role);
         CREATE INDEX IF NOT EXISTS idx_offscreen ON elements(offscreen);
@@ -2248,11 +2249,32 @@ fn stream_elements(
     } else {
         String::new()
     };
+    // Action.Invoke availability — only queried for roles that can carry
+    // actions so the dbus cost of huge trees stays flat. GetActions returns
+    // a(sss): (name, description, keybinding) per action.
+    let action_count = if matches!(
+        role,
+        "Button" | "MenuItem" | "Menu" | "CheckBox" | "RadioButton" | "ListItem" | "ComboBox"
+            | "TabItem" | "Link" | "PageTab" | "ToggleButton" | "Image" | "TableCell"
+            | "Row" | "ColumnHeader" | "Slider" | "ScrollBar" | "Hyperlink" | "TreeItem"
+    ) {
+        acc_call::<_, Vec<(String, String, String)>>(
+            &node.service,
+            &node.path,
+            "org.a11y.atspi.Action",
+            "GetActions",
+            &(),
+        )
+        .map(|v| v.len() as i32)
+        .unwrap_or(0)
+    } else {
+        0
+    };
 
     ctx.count += 1;
     let my_id = ctx.count;
     let _ = ctx.conn.execute(
-        "INSERT INTO elements(id,parent_id,depth,role,name,value,automation_id,enabled,offscreen,x,y,w,h) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        "INSERT INTO elements(id,parent_id,depth,role,name,value,automation_id,enabled,offscreen,x,y,w,h,actions) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             my_id, parent_id, depth,
             role,
@@ -2260,7 +2282,8 @@ fn stream_elements(
             if value.is_empty() { None } else { Some(value) },
             Option::<String>::None,
             enabled as i32, offscreen,
-            extent.0, extent.1, extent.2, extent.3
+            extent.0, extent.1, extent.2, extent.3,
+            action_count
         ],
     );
     ctx.batch += 1;
@@ -2367,7 +2390,8 @@ fn dump_tree() {
                         id INTEGER PRIMARY KEY, parent_id INTEGER, depth INTEGER,
                         role TEXT NOT NULL, name TEXT, value TEXT, automation_id TEXT,
                         enabled INTEGER DEFAULT 1, offscreen INTEGER DEFAULT 0,
-                        x INTEGER, y INTEGER, w INTEGER, h INTEGER
+                        x INTEGER, y INTEGER, w INTEGER, h INTEGER,
+                        actions INTEGER DEFAULT 0
                     );
                 ",
                 );
@@ -2386,6 +2410,7 @@ fn dump_tree() {
                 let _ = conn.execute_batch("COMMIT;");
                 let total_ms = t0.elapsed().as_millis();
                 log(&format!("dump: {} rows streamed, total={}ms", ctx.count, total_ms));
+                log_a11y_hint_if_thin(ctx.count as usize);
 
                 generate_snap(&db_path);
                 generate_a11y(&db_path);
@@ -2442,6 +2467,40 @@ fn do_snap(target: u32, title: &str) {
         dump_tree();
     });
     log("do_snap: COMPLETE");
+}
+
+// ── A11y hints: actionable advice when a target barely exposes a tree ──
+fn a11y_hint_for(exe: &str) -> &'static str {
+    let e = exe.to_lowercase();
+    if e.contains("chrome") || e.contains("chromium") || matches!(e.as_str(),
+        "code" | "discord" | "slack" | "signal" | "element" | "obsidian")
+        || e.contains("electron")
+    {
+        "relaunch it with --force-renderer-accessibility"
+    } else if e.contains("firefox") || e.contains("librewolf") || e.contains("thunderbird") {
+        "set accessibility.force_disabled=0 in about:config, then restart the app"
+    } else if e.contains("qt") || ["keepassxc", "qbittorrent", "vlc", "krita"].contains(&e.as_str())
+    {
+        "install qt-at-spi (or qt6-atspi) and launch with QT_ACCESSIBILITY=1"
+    } else if e.contains("java") || e.ends_with("_wrap") {
+        "install java-atk-wrapper and enable accessibility in its config"
+    } else {
+        "this app may not expose an accessibility tree on Linux"
+    }
+}
+
+fn log_a11y_hint_if_thin(count: usize) {
+    if count >= 15 {
+        return;
+    }
+    let pid = TARGET_PID.load(SeqCst);
+    let exe = fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    log(&format!(
+        "dump: only {count} elements from pid {pid} ({exe}) — {}",
+        a11y_hint_for(&exe)
+    ));
 }
 
 fn do_unsnap() {
@@ -2742,6 +2801,26 @@ fn process_injections() {
                 let r = click_element(&target_name);
                 log(&format!("click: END '{}' result={}", target_name, r));
                 r
+            }
+            "invoke" => {
+                log(&format!("invoke: BEGIN '{}'", target_name));
+                match find_target(&target_name, false) {
+                    None => {
+                        log("invoke: element not found");
+                        false
+                    }
+                    Some(el) => {
+                        let r: Option<bool> = acc_call::<_, bool>(
+                            &el.service,
+                            &el.path,
+                            "org.a11y.atspi.Action",
+                            "DoAction",
+                            &(0i32),
+                        );
+                        log(&format!("invoke: DoAction -> {:?}", r));
+                        r.unwrap_or(false)
+                    }
+                }
             }
             "clipset" => set_clipboard(&text),
             "clipget" => {

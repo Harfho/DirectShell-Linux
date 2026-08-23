@@ -25,6 +25,9 @@ bridge over its file protocol in `ds_profiles/`:
 - `unsnap` — detach from the current window
 - `active_status` — what is snapped right now
 - `find_elements {name?, role?, visible_only?}` — query the element table
+- `invoke_element {element}` — activate an element's default action (press
+  button, open menu, follow link) via AT-SPI — no coordinates needed;
+  elements that support it have `actions > 0`
 - `click_element {element}` — XTEST click at an element's center
 - `type_text {text, element?}` — focus target then type raw keystrokes
 - `set_clipboard {text}` / `get_clipboard` — native X11 CLIPBOARD access

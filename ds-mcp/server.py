@@ -110,6 +110,17 @@ TOOLS = [
         },
     },
     {
+        "name": "invoke_element",
+        "description": "Activate an element's default action (press button, "
+        "open menu item, follow link) via AT-SPI — no coordinates needed. "
+        "Elements that support this have actions > 0 in find_elements.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"element": {"type": "string"}},
+            "required": ["element"],
+        },
+    },
+    {
         "name": "set_clipboard",
         "description": "Put text on the X11 CLIPBOARD selection "
         "(owned natively by the daemon).",
@@ -298,7 +309,7 @@ def tool_find_elements(args):
     limit = max(1, min(int(args.get("limit", 50)), 500))
     sql = (
         "SELECT id,parent_id,depth,role,name,value,automation_id,"
-        "enabled,offscreen,x,y,w,h FROM elements"
+        "enabled,offscreen,x,y,w,h,actions FROM elements"
     )
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -441,6 +452,22 @@ def tool_get_clipboard(_args):
                          "text": json.dumps({"status": res.get("status"), "clipboard": data})}]}
 
 
+def tool_invoke_element(args):
+    """Trigger an element's AT-SPI Action (buttons, menu items, links) without
+    coordinate clicks — the accessibility-native equivalent of UIA Invoke."""
+    db = active_db()
+    if db is None:
+        raise RuntimeError("no window snapped — call snap_window first")
+    el = _arg(args, "element")
+    if not el:
+        raise ValueError("invoke_element needs an element name or role")
+    conn = sqlite3.connect(db, timeout=5)
+    conn.execute("PRAGMA busy_timeout=3000")
+    out = _queue_inject(conn, "invoke", "", el)
+    conn.close()
+    return {"content": [{"type": "text", "text": json.dumps({"invoked": el, **out})}]}
+
+
 def tool_press_key(args):
     db = active_db()
     if db is None:
@@ -475,6 +502,7 @@ HANDLERS = {
     "find_elements": tool_find_elements,
     "click_element": tool_click_element,
     "type_text": tool_type_text,
+    "invoke_element": tool_invoke_element,
     "press_key": tool_press_key,
     "scroll": tool_scroll,
     "set_clipboard": tool_set_clipboard,
