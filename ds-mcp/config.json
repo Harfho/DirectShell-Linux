@@ -1,0 +1,6 @@
+{
+  "_comment": "The MCP server (server.py) is configured implicitly: it resolves ds_profiles/ relative to the project root and requires the DirectShell daemon to be running. No runtime config is read from this file.",
+  "daemon_protocol_dir": "../ds_profiles",
+  "transport": "stdio (JSON-RPC 2.0, newline-delimited)",
+  "dependencies": []
+}

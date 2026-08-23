@@ -1,0 +1,15 @@
+[package]
+name = "directshell-linux"
+version = "0.3.1"
+edition = "2021"
+
+[[bin]]
+name = "directshell-linux"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = "1"
+x11rb = { version = "0.14", features = ["shape", "xtest"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+libc = "0.2"

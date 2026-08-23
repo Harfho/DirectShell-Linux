@@ -1,0 +1,17 @@
+# Rust build artifacts (800+ MB)
+/target
+
+# Runtime protocol dir — created automatically by the daemon.
+# Contains per-window SQLite dumps, logs, pipes, lock files,
+# and window titles of everything open on the machine (privacy).
+/ds_profiles
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+*.swp
+.idea/
+.vscode/
+.DS_Store
