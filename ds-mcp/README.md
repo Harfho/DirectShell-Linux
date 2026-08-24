@@ -34,6 +34,10 @@ bridge over its file protocol in `ds_profiles/`:
 - `paste_text {text, element?}` — clipboard + ctrl+v (fast bulk input)
 - `press_key {combo}` — e.g. `ctrl+s`, `Return`, `alt+F4`
 - `scroll {direction, amount?}` — `up`/`down`
+- `get_notes` / `append_note {app?, situation, do}` — shared AI notes file
+  (`~/.config/directshell/AI_NOTES.md`, falls back to this version's
+  `ds_profiles/`): lessons other AI sessions logged — check first when
+  something misbehaves, append when you discover a gotcha
 
 ## Usage
 
@@ -64,3 +68,5 @@ Notes:
 - Only one window can be snapped at a time; snapping again re-targets.
 - `type_text` sends real keyboard events to the focused widget — click an
   editable element first (or pass `element`) so the caret is where you expect.
+  URL-shaped text without `element` is guarded: if the focused widget isn't
+  editable, it's delivered via clipboard paste instead of keystrokes.

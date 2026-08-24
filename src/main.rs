@@ -296,7 +296,24 @@ fn init_db(db_path: &str) -> Option<Connection> {
             element_role  TEXT,
             detail        TEXT,
             new_value     TEXT,
+            summary       TEXT,
             consumed      INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS elements_prev (
+            id            INTEGER PRIMARY KEY,
+            parent_id     INTEGER,
+            depth         INTEGER,
+            role          TEXT NOT NULL,
+            name          TEXT,
+            value         TEXT,
+            automation_id TEXT,
+            enabled       INTEGER DEFAULT 1,
+            offscreen     INTEGER DEFAULT 0,
+            x             INTEGER,
+            y             INTEGER,
+            w             INTEGER,
+            h             INTEGER,
+            actions       INTEGER DEFAULT 0
         );
     ",
     );
@@ -2014,6 +2031,7 @@ const ST_ENABLED: u64 = 8;
 const ST_SENSITIVE: u64 = 24;
 const ST_SHOWING: u64 = 25;
 const ST_VISIBLE: u64 = 30;
+const ST_FOCUSED: u64 = 12;
 
 /// AT-SPI GetState returns an array of uint32s ('au'), each bit a StateType.
 fn acc_states(a: &AccRef) -> u64 {
@@ -2375,6 +2393,121 @@ fn current_window_title(target: u32) -> String {
     .unwrap_or_default()
 }
 
+
+// ── Delta perception ─────────────────────────────────
+/// Compare `elements` (just built) against `elements_prev` (previous cycle)
+/// and append rows to `events` for anything that changed.  Then copy
+/// `elements` → `elements_prev` so the next cycle has a baseline.
+///
+/// Stable element identity key: (name, role, depth)
+///   — depth disambiguates same-named widgets at different tree levels
+///   — more stable than AT-SPI object paths which change on recreation
+///
+/// Event types emitted:
+///   appeared        — element in elements but not in elements_prev
+///   disappeared     — element in elements_prev but not in elements
+///   value_changed   — same key, value column differs
+///   enabled_changed — same key, enabled column differs
+///   state_changed   — same key, offscreen column differs
+fn diff_and_emit_events(conn: &Connection) {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    // ── 1. appeared ─────────────────────────────────────────────────────────────
+    let _ = conn.execute_batch(&format!(
+        "INSERT INTO events(timestamp,event_type,element_name,element_role,detail,new_value,summary)
+         SELECT {ts},'appeared',e.name,e.role,
+                'element appeared in UI',
+                e.value,
+                e.role || ' \"' || e.name || '\" appeared'
+         FROM elements e
+         WHERE e.name IS NOT NULL AND e.name != ''
+           AND e.offscreen = 0
+           AND NOT EXISTS (
+               SELECT 1 FROM elements_prev p
+               WHERE p.name=e.name AND p.role=e.role AND p.depth=e.depth
+           );"
+    ));
+
+    // ── 2. disappeared ──────────────────────────────────────────────────────────
+    let _ = conn.execute_batch(&format!(
+        "INSERT INTO events(timestamp,event_type,element_name,element_role,detail,new_value,summary)
+         SELECT {ts},'disappeared',p.name,p.role,
+                'element no longer in UI',
+                NULL,
+                p.role || ' \"' || p.name || '\" disappeared'
+         FROM elements_prev p
+         WHERE p.name IS NOT NULL AND p.name != ''
+           AND p.offscreen = 0
+           AND NOT EXISTS (
+               SELECT 1 FROM elements e
+               WHERE e.name=p.name AND e.role=p.role AND e.depth=p.depth
+           );"
+    ));
+
+    // ── 3. value_changed ────────────────────────────────────────────────────────
+    let _ = conn.execute_batch(&format!(
+        "INSERT INTO events(timestamp,event_type,element_name,element_role,detail,new_value,summary)
+         SELECT {ts},'value_changed',e.name,e.role,
+                COALESCE(p.value,'(empty)') || ' → ' || COALESCE(e.value,'(empty)'),
+                e.value,
+                e.role || ' \"' || e.name || '\" value changed'
+         FROM elements e
+         JOIN elements_prev p ON p.name=e.name AND p.role=e.role AND p.depth=e.depth
+         WHERE COALESCE(e.value,'') != COALESCE(p.value,'')
+           AND e.name IS NOT NULL AND e.name != ''
+           AND e.offscreen = 0
+           AND e.role IN ('Edit','Document','ComboBox','Spinner','CheckBox','RadioButton');"
+    ));
+
+    // ── 4. enabled_changed ──────────────────────────────────────────────────────
+    let _ = conn.execute_batch(&format!(
+        "INSERT INTO events(timestamp,event_type,element_name,element_role,detail,new_value,summary)
+         SELECT {ts},'enabled_changed',e.name,e.role,
+                CASE WHEN e.enabled=1 THEN 'became enabled' ELSE 'became disabled' END,
+                CAST(e.enabled AS TEXT),
+                e.role || ' \"' || e.name || '\" ' ||
+                    CASE WHEN e.enabled=1 THEN 'became enabled' ELSE 'became disabled' END
+         FROM elements e
+         JOIN elements_prev p ON p.name=e.name AND p.role=e.role AND p.depth=e.depth
+         WHERE e.enabled != p.enabled
+           AND e.name IS NOT NULL AND e.name != '';"
+    ));
+
+    // ── 5. state_changed (visible/hidden) ───────────────────────────────────────
+    let _ = conn.execute_batch(&format!(
+        "INSERT INTO events(timestamp,event_type,element_name,element_role,detail,new_value,summary)
+         SELECT {ts},'state_changed',e.name,e.role,
+                CASE WHEN e.offscreen=0 THEN 'became visible' ELSE 'became hidden' END,
+                CASE WHEN e.offscreen=0 THEN 'visible' ELSE 'hidden' END,
+                e.role || ' \"' || e.name || '\" ' ||
+                    CASE WHEN e.offscreen=0 THEN 'became visible' ELSE 'became hidden' END
+         FROM elements e
+         JOIN elements_prev p ON p.name=e.name AND p.role=e.role AND p.depth=e.depth
+         WHERE e.offscreen != p.offscreen
+           AND e.name IS NOT NULL AND e.name != '';"
+    ));
+
+    // ── 6. Rotate: copy current elements → elements_prev ────────────────────────
+    let _ = conn.execute_batch(
+        "DELETE FROM elements_prev;
+         INSERT INTO elements_prev
+             SELECT id,parent_id,depth,role,name,value,automation_id,
+                    enabled,offscreen,x,y,w,h,actions
+             FROM elements;",
+    );
+
+    // Prune: keep newest 500 total, always keep unconsumed
+    let _ = conn.execute_batch(
+        "DELETE FROM events WHERE consumed=1
+             AND id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 200);
+         DELETE FROM events WHERE id NOT IN
+             (SELECT id FROM events ORDER BY id DESC LIMIT 500);",
+    );
+}
+
 fn dump_tree() {
     if TREE_BUSY.compare_exchange(false, true, SeqCst, SeqCst).is_err() {
         return;
@@ -2442,6 +2575,8 @@ fn dump_tree() {
                 let total_ms = t0.elapsed().as_millis();
                 log(&format!("dump: {} rows streamed, total={}ms", ctx.count, total_ms));
                 log_a11y_hint_if_thin(ctx.count as usize);
+
+                diff_and_emit_events(&conn);
 
                 generate_snap(&db_path);
                 generate_a11y(&db_path);
@@ -2672,6 +2807,27 @@ fn find_element_opts(
     fallback
 }
 
+/// The currently focused accessible inside the snapped app, if detectable.
+fn focused_node() -> Option<AccRef> {
+    let root = LAST_APP_ROOT.lock().unwrap().clone()?;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if has_bit(acc_states(&node), ST_FOCUSED) {
+            return Some(node);
+        }
+        for c in acc_children(&node) {
+            stack.push(c);
+        }
+    }
+    None
+}
+
+/// URL-shaped text: raw keystrokes could trigger browser single-key
+/// shortcuts (Quick Find on '/', etc.), so it must not be typed blind.
+fn looks_like_url(text: &str) -> bool {
+    text.contains("://") || text.starts_with("www.") || text.starts_with("http")
+}
+
 fn inject_text(text: &str, target_name: &str) -> bool {
     let elem = if target_name.is_empty() {
         None
@@ -2781,6 +2937,36 @@ fn process_injections() {
                     });
                     std::thread::sleep(Duration::from_millis(80));
                 }
+                // URL guard: elementless typing of URL-shaped text must not
+                // land on page content — a '/' there opens browser Quick Find.
+                let mut guarded_paste = false;
+                if target_name.is_empty() && looks_like_url(&text) {
+                    match focused_node() {
+                        Some(f) => {
+                            if has_bit(acc_states(&f), ST_EDITABLE) {
+                                log("type: URL guard — editable focused, typing raw");
+                            } else {
+                                log(&format!(
+                                    "type: URL guard — focused {} '{}' not editable, using clipboard paste",
+                                    acc_role_name(&f),
+                                    acc_name(&f)
+                                ));
+                                if set_clipboard(&text) {
+                                    std::thread::sleep(Duration::from_millis(150));
+                                    send_key_combo("ctrl+v");
+                                    log("type: URL guard — pasted");
+                                } else {
+                                    log("type: URL guard — clipboard set failed");
+                                }
+                                guarded_paste = true;
+                            }
+                        }
+                        None => log("type: URL guard — focus undetectable, typing raw"),
+                    }
+                }
+                if guarded_paste {
+                    true
+                } else {
                 if lx >= 0 && ly >= 0 {
                     let aw_before = active_window();
                     mouse_click(lx, ly);
@@ -2815,6 +3001,7 @@ fn process_injections() {
                     log(&format!("type: ALL {} CHARS DONE", text.len()));
                 }
                 !aborted
+                }
             }
             "key" => {
                 if t != 0 {
