@@ -39,6 +39,29 @@ bridge over its file protocol in `ds_profiles/`:
   `ds_profiles/`): lessons other AI sessions logged — check first when
   something misbehaves, append when you discover a gotcha
 
+## Design decisions
+
+**Why `get_notes`/`append_note` instead of `ds_learn` + `tip_engine`?**
+
+The upstream Windows version (IamLumae/DirectShell) uses `ds_learn()` which
+persists to `ds_profiles/learnings/` and auto-injects lessons into tool
+responses via `tip_engine` + `tip_miner.py`. That system is tightly coupled
+to the Windows daemon's action logs and the tip_miner's pattern mining —
+neither of which exist in this Linux port.
+
+This port keeps a simpler model: a single shared notes file
+(`~/.config/directshell/AI_NOTES.md`), read via `get_notes` at session start
+and appended via `append_note` when a new gotcha is discovered. It works
+without mining, without per-app indexing, and without requiring the daemon to
+emit structured action logs. The tradeoff is that lessons are manual (the
+model has to call `get_notes`) rather than auto-injected — but in practice the
+model reads it reliably on startup.
+
+If the Linux daemon later emits structured action logs, porting
+`tip_miner.py` + `tip_engine` is straightforward and would replace this file
+with automatic per-app injection. Until then, the notes file is the simplest
+thing that works.
+
 ## Usage
 
 Start the daemon first (see ../BUILD.md), then register the server with your
