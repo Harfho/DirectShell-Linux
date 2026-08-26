@@ -4,7 +4,7 @@ Linux port of DirectShell using AT-SPI2 over D-Bus.
 
 ## Overview
 
-This is a working Linux port of DirectShell that replaces Windows UIA accessibility with Linux AT-SPI2 accessibility via D-Bus. It covers window snapping, overlay injection, AT-SPI2 tree traversal, and XTEST input — but not every Windows feature has a Linux equivalent yet.
+This is a working Linux port of DirectShell that replaces Windows UIA accessibility with Linux AT-SPI2 accessibility via D-Bus. It covers window snapping, overlay injection, AT-SPI2 tree traversal, and XTEST input.
 
 ## Files
 
