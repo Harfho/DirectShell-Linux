@@ -1,10 +1,10 @@
-# DirectShell for Linux - Final Implementation
+# DirectShell for Linux
 
-This directory contains the complete Linux implementation of DirectShell using AT-SPI2.
+Linux port of DirectShell using AT-SPI2 over D-Bus.
 
 ## Overview
 
-This is a complete Linux port of DirectShell that replaces Windows UIA accessibility with Linux AT-SPI2 accessibility. The implementation maintains full compatibility with the Windows version.
+This is a working Linux port of DirectShell that replaces Windows UIA accessibility with Linux AT-SPI2 accessibility via D-Bus. It covers window snapping, overlay injection, AT-SPI2 tree traversal, and XTEST input — but not every Windows feature has a Linux equivalent yet.
 
 ## Files
 

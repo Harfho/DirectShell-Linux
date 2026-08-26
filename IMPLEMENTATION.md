@@ -1,6 +1,6 @@
 # DirectShell Linux Implementation
 
-This is the complete Linux port of DirectShell that implements all required functionality.
+This is a working Linux port of DirectShell that implements core functionality using AT-SPI2 over D-Bus instead of Windows UIA.
 
 ## Implementation Details
 
@@ -55,4 +55,4 @@ The implementation uses `x11rb` for X11 (overlay, shape, XTEST) and `zbus`
 for AT-SPI2 over D-Bus — no C library bindings or placeholder code. It is
 live-tested against GTK applications; see `STATUS.md`.
 
-All file formats and database structure remain identical to the Windows version for full compatibility with existing AI agents and tools.
+File formats and database structure are compatible with the Windows version.
