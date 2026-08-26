@@ -23,23 +23,13 @@ This is a complete Linux port of DirectShell that replaces Windows UIA accessibi
 
 ## Dependencies
 
-The implementation requires:
 - Rust (1.70+)
-- AT-SPI2 development libraries
 
 ## Build Instructions
 
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install AT-SPI2 libraries
-# Ubuntu/Debian:
-sudo apt install libatspi2.0-dev
-# Fedora:
-sudo dnf install at-spi2-core-devel
-# Arch:
-sudo pacman -S at-spi2
 
 # Build
 cargo build --release

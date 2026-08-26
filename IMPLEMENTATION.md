@@ -8,7 +8,7 @@ The Linux version fully implements the same functionality as the Windows version
 
 1. **Core Architecture** - Same database structure using SQLite
 2. **AT-SPI2 Integration** - Full replacement for Windows UIA accessibility
-3. **Window Management** - X11/Wayland window detection and overlay management
+3. **Window Management** - X11 window detection and overlay management
 4. **File Generation** - Creates .snap, .a11y, and .a11y.snap files
 5. **Database Storage** - SQLite database with accessibility data
 6. **MCP Server** - stdio JSON-RPC interface for AI agents (ds-mcp/server.py)
@@ -32,7 +32,7 @@ The Linux version fully implements the same functionality as the Windows version
 ### Window Management
 - Overlay window creation and positioning
 - Window snapping functionality
-- X11/Wayland window detection
+- X11 window detection
 - Full window management capabilities
 
 ### File Generation
@@ -44,12 +44,10 @@ The Linux version fully implements the same functionality as the Windows version
 ## Build Instructions
 
 1. Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-2. Install AT-SPI2 libraries:
-   - Ubuntu/Debian: `sudo apt install libatspi2.0-dev`
-   - Fedora: `sudo dnf install at-spi2-core-devel`
-   - Arch: `sudo pacman -S at-spi2`
-3. Build: `cargo build --release`
-4. Run: `./target/release/directshell-linux`
+2. Build: `cargo build --release`
+3. Run: `./target/release/directshell-linux`
+
+No system dev libraries needed — x11rb and zbus are pure Rust.
 
 ## Notes
 
